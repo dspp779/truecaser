@@ -12,7 +12,7 @@ import math
 import numpy as np
 import random
 import tempfile
-from truecaser.AbstractTruecaser import AbstractTruecaser
+from .abstract_truecaser import AbstractTruecaser
 
 
 class NeuralTruecaser(AbstractTruecaser):

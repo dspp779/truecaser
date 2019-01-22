@@ -2,7 +2,7 @@ from __future__ import print_function
 import nltk
 import math
 import string
-from AbstractTruecaser import AbstractTruecaser
+from .abstract_truecaser import AbstractTruecaser
 
 
 class StatisticalTruecaser(AbstractTruecaser):
