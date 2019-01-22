@@ -25,7 +25,17 @@ class AbstractTruecaser:
         return nltk.word_tokenize(sentence)
 
     def untokenize(self, tokens):
-        return "".join([" "+i if not i.startswith("'") and i not in string.punctuation else i for i in tokens]).strip()
+        def gen_token(tokens):
+            for token in tokens:
+                if token in string.punctuation:
+                    yield token
+                elif token.startswith("'"):
+                    yield token
+                else:
+                    yield ' '
+                    yield token
+
+        return ''.join(gen_token(tokens))
 
     @staticmethod
     def load(modelpath):
