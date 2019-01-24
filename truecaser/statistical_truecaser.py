@@ -2,7 +2,12 @@ from __future__ import print_function
 import nltk
 import math
 import string
+import logging
+from collections import defaultdict
 from .abstract_truecaser import AbstractTruecaser
+
+
+PSEUDO_COUNT = 5.0
 
 
 class StatisticalTruecaser(AbstractTruecaser):
@@ -12,94 +17,60 @@ class StatisticalTruecaser(AbstractTruecaser):
         self.backwardBiDist = nltk.FreqDist()
         self.forwardBiDist = nltk.FreqDist()
         self.trigramDist = nltk.FreqDist()
-        self.wordCasingLookup = {}
+        self.wordCasingLookup = defaultdict(set)
         self.title_case_unknown_tokens = True
 
     def train(self, sentences, input_tokenized=False):
         if not input_tokenized:
             sentences = map(self.tokenize, sentences)
 
-        cleanedSentences = []
-        for sentence in sentences:
-            if self._check_sentence_sanity(sentence):
-                cleanedSentences.append(sentence)
+        cleaned_sentences = filter(self._check_sentence_sanity, sentences)
 
-        print("Create unigram lookup")
-        # :: Create unigram lookup ::
-        for sentence in cleanedSentences:
-            for tokenIdx in range(1, len(sentence)):
-                word = sentence[tokenIdx]
+        for sentence in cleaned_sentences:
+
+            logging.info("Create unigram lookup")
+            # Create unigram lookup
+            for word in sentence:
                 self.uniDist[word] += 1
+                self.wordCasingLookup.setdefault(word.lower(), {}).add(word)
 
-                if word.lower() not in self.wordCasingLookup:
-                    self.wordCasingLookup[word.lower()] = set()
-
-                self.wordCasingLookup[word.lower()].add(word)
-
-        print("Create bi+trigram lookup")
-        # :: Create backward + forward bigram lookup + trigram lookup ::
-        for sentence in cleanedSentences:
-            # :: Create bigram lookuo ::
-            for tokenIdx in range(2, len(sentence)):  # Start at 2 to skip first word in sentence
-                word = sentence[tokenIdx]
-                wordLower = word.lower()
-
+            # Create backward + forward bigram lookup + trigram lookup
+            logging.info("Create bigram lookup")
+            # :: Create bigram lookup ::
+            for bigram in nltk.ngrams(sentence, 2):
                 # Only if there are multiple options
-                if wordLower in self.wordCasingLookup and len(self.wordCasingLookup[wordLower]) >= 2:
-                    prevWord = sentence[tokenIdx-1]
+                if len(self.wordCasingLookup.get(bigram[-1].lower())) >= 2:
+                    self.backwardBiDist[bigram] += 1
+                if len(self.wordCasingLookup.get(bigram[0].lower())) >= 2:
+                    self.forwardBiDist[bigram] += 1
 
-                    self.backwardBiDist[prevWord+"_"+word] += 1
-
-                    if tokenIdx < len(sentence)-1:
-                        nextWord = sentence[tokenIdx+1].lower()
-                        self.forwardBiDist[word+"_"+nextWord] += 1
-
+            logging.info("Create trigram lookup")
             # :: Create trigram lookup ::
-            # Start at 2 to skip first word in sentence
-            for tokenIdx in range(2, len(sentence)-1):
-                prevWord = sentence[tokenIdx-1]
-                curWord = sentence[tokenIdx]
-                curWordLower = word.lower()
-                nextWordLower = sentence[tokenIdx+1].lower()
+            for trigram in nltk.ngrams(sentence, 3):
+                if len(self.wordCasingLookup.get(trigram[1].lower())) >= 2:
+                    self.backwardBiDist[trigram] += 1
 
-                if curWordLower in self.wordCasingLookup and len(self.wordCasingLookup[curWordLower]) >= 2: #Only if there are multiple options   
-                    self.trigramDist[prevWord+"_"+curWord+"_"+nextWordLower] += 1
-
-    def train_from_ngram_file(self, bigramFile, trigramFile):
+    def train_from_ngram_file(self, bigram_file, trigram_file):
         """
         Updates the FrequencyDistribitions based on an ngram file,
         e.g. the ngram file of http://www.ngrams.info/download_coca.asp
         """
-        for line in open(bigramFile):
-            splits = line.strip().split('\t')
-            cnt, word1, word2 = splits
-            cnt = int(cnt)
+        def parse_line(line):
+            count, *words = line.strip().split('\t')
+            return tuple(words), int(count)
 
-            # Unigram
-            if word1.lower() not in self.wordCasingLookup:
-                self.wordCasingLookup[word1.lower()] = set()
-
-            self.wordCasingLookup[word1.lower()].add(word1)
-
-            if word2.lower() not in self.wordCasingLookup:
-                self.wordCasingLookup[word2.lower()] = set()
-
-            self.wordCasingLookup[word2.lower()].add(word2)
-
-            self.uniDist[word1] += cnt
-            self.uniDist[word2] += cnt
+        for bigram, count in map(parse_line, open(bigram_file)):
+            for word in bigram:
+                self.wordCasingLookup[word.lower()].add(word)
+                self.uniDist[word] += count
 
             # Bigrams
-            self.backwardBiDist[word1+"_"+word2] += cnt
-            self.forwardBiDist[word1+"_"+word2.lower()] += cnt
+            self.backwardBiDist[bigram] += count
+            self.forwardBiDist[bigram] += count
 
         # tigrams
-        for line in open(trigramFile):
-            splits = line.strip().split('\t')
-            cnt, word1, word2, word3 = splits
-            cnt = int(cnt)
-
-            self.trigramDist[word1+"_"+word2+"_"+word3.lower()] += cnt
+        for trigram, count in map(parse_line, open(trigram_file)):
+            self.trigramDist[trigram] += count
 
     def truecase(self, sentence, input_tokenized=False, output_tokenized=False, title_case_start_sentence=True):
         """
@@ -110,45 +81,38 @@ class StatisticalTruecaser(AbstractTruecaser):
             sentence = self.tokenize(sentence)
 
         tokensTrueCase = []
-        for tokenIdx in range(len(sentence)):
-            token = sentence[tokenIdx]
+        for i, token in enumerate(sentence):
+            # if toke is punctuation or digits
             if token in string.punctuation or token.isdigit():
                 tokensTrueCase.append(token)
-            else:
-                if token in self.wordCasingLookup:
-                    if len(self.wordCasingLookup[token]) == 1:
-                        tokensTrueCase.append(list(self.wordCasingLookup[token])[0])
-                    else:
-                        prevToken = tokensTrueCase[tokenIdx-1] if tokenIdx > 0  else None
-                        nextToken = sentence[tokenIdx+1] if tokenIdx < len(sentence)-1 else None
+                continue
 
-                        bestToken = None
-                        highestScore = float("-inf")
+            candidates = self.wordCasingLookup.get(token)
+            if candidates:
+                if len(candidates) == 1:
+                    tokensTrueCase.append(iter(candidates).next())
+                else:
+                    prevToken = tokensTrueCase[i-1] if i > 0 else None
+                    nextToken = sentence[i+1] if i < len(sentence)-1 else None
 
-                        for possibleToken in self.wordCasingLookup[token]:
-                            score = self._score(prevToken, possibleToken, nextToken)
+                    bestToken = max(candidates, key=lambda x: self._score(prevToken, x, nextToken))
+                    tokensTrueCase.append(bestToken)
 
-                            if score > highestScore:
-                                bestToken = possibleToken
-                                highestScore = score
-
-                        tokensTrueCase.append(bestToken)
-
-                else:  # Token out of vocabulary
-                    if self.title_case_unknown_tokens:
-                        tokensTrueCase.append(token.title())
-                    else:
-                        tokensTrueCase.append(token.lower())
+            else:  # Token out of vocabulary
+                if self.title_case_unknown_tokens:
+                    tokensTrueCase.append(token.title())
+                else:
+                    tokensTrueCase.append(token.lower())
 
         if title_case_start_sentence:
             # Title case the first token in a sentence
-            tokensTrueCase[0] = tokensTrueCase[0].title() if tokensTrueCase[0].islower() else tokensTrueCase[0]
-
-            if tokensTrueCase[0] == '"':
-                tokensTrueCase[1] = tokensTrueCase[1].title() if tokensTrueCase[1].islower() else tokensTrueCase[1]
+            if tokensTrueCase[0].islower():
+                tokensTrueCase[0] = tokensTrueCase[0].title()
+            elif tokensTrueCase[0] == '"':
+                tokensTrueCase[1] = tokensTrueCase[1].title()
 
         if not output_tokenized:
-            tokensTrueCase = self.untokenize(tokensTrueCase)
+            return self.untokenize(tokensTrueCase)
 
         return tokensTrueCase
 
@@ -156,50 +120,32 @@ class StatisticalTruecaser(AbstractTruecaser):
         """ Checks the sanity of the sentence. Reject too short sentences"""
         return len(sentence) >= 6 and not " ".join(sentence).isupper()
 
-    def _score(self, prevToken, possibleToken, nextToken):
-        pseudoCount = 5.0
+    def _score(self, prev, cur, follow):
+        candidates = self.wordCasingLookup[cur.lower()]
 
         # Get Unigram Score
-        nominator = self.uniDist[possibleToken] + pseudoCount
-        denominator = 0
-        for alternativeToken in self.wordCasingLookup[possibleToken.lower()]:
-            denominator += self.uniDist[alternativeToken]+pseudoCount
-
-        unigramScore = nominator / denominator
+        total = sum(self.uniDist[word]+PSEUDO_COUNT for word in candidates)
+        unigram_score = (self.uniDist[cur]+PSEUDO_COUNT) / total
 
         # Get Backward Score
-        bigramBackwardScore = 1
-        if prevToken and self.backwardBiDist:
-            nominator = self.backwardBiDist[prevToken+'_'+possibleToken]+pseudoCount
-            denominator = 0
-            for alternativeToken in self.wordCasingLookup[possibleToken.lower()]:
-                denominator += self.backwardBiDist[prevToken+'_'+alternativeToken]+pseudoCount
-
-            bigramBackwardScore = nominator / denominator
+        bigram_backwardscore = 1
+        if prev and self.backwardBiDist:
+            total = sum(self.backwardBiDist[prev, word]+PSEUDO_COUNT for word in candidates)
+            bigram_backwardscore = (self.backwardBiDist[prev, cur]+PSEUDO_COUNT) / total
 
         # Get Forward Score
-        bigramForwardScore = 1
-        if nextToken and self.forwardBiDist:
-            nextToken = nextToken.lower()  # Ensure it is lower case
-            nominator = self.forwardBiDist[possibleToken+"_"+nextToken]+pseudoCount
-            denominator = 0
-            for alternativeToken in self.wordCasingLookup[possibleToken.lower()]:
-                denominator += self.forwardBiDist[alternativeToken+"_"+nextToken]+pseudoCount
-
-            bigramForwardScore = nominator / denominator
+        bigram_forwardscore = 1
+        if follow and self.forwardBiDist:
+            total = sum(self.forwardBiDist[word, follow]+PSEUDO_COUNT for word in candidates)
+            bigram_forwardscore = (self.forwardBiDist[cur, follow]+PSEUDO_COUNT) / total
 
         # Get Trigram Score
-        trigramScore = 1
-        if prevToken and nextToken and self.trigramDist:
-            nextToken = nextToken.lower()  # Ensure it is lower case
-            nominator = self.trigramDist[prevToken+"_"+possibleToken+"_"+nextToken]+pseudoCount
-            denominator = 0    
-            for alternativeToken in self.wordCasingLookup[possibleToken.lower()]:
-                denominator += self.trigramDist[prevToken+"_"+alternativeToken+"_"+nextToken] + pseudoCount
+        trigram_score = 1
+        if prev and follow and self.trigramDist:
+            total = sum(self.trigramDist[prev, word, follow]+PSEUDO_COUNT for word in candidates)
+            trigram_score = (self.trigramDist[prev, cur, follow]+PSEUDO_COUNT) / total
 
-            trigramScore = nominator / denominator
-
-        result = math.log(unigramScore) + math.log(bigramBackwardScore) + math.log(bigramForwardScore) + math.log(trigramScore)
-        # print "Scores: %f %f %f %f = %f" % (unigramScore, bigramBackwardScore, bigramForwardScore, trigramScore, math.exp(result))
+        scores = [unigram_score, bigram_backwardscore, bigram_forwardscore, trigram_score]
+        result = sum(map(math.log, scores))
 
         return result
