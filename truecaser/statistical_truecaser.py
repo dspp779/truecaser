@@ -32,7 +32,7 @@ class StatisticalTruecaser(AbstractTruecaser):
             # Create unigram lookup
             for word in sentence:
                 self.uniDist[word] += 1
-                self.wordCasingLookup.setdefault(word.lower(), {}).add(word)
+                self.wordCasingLookup[word.lower()].add(word)
 
             # Create backward + forward bigram lookup + trigram lookup
             logging.info("Create bigram lookup")
