@@ -65,12 +65,15 @@ class StatisticalTruecaser(AbstractTruecaser):
                 self.uniDist[word] += count
 
             # Bigrams
-            self.backwardBiDist[bigram] += count
-            self.forwardBiDist[bigram] += count
+            if len(self.wordCasingLookup.get(bigram[-1].lower())) >= 2:
+                self.backwardBiDist[bigram] += count
+            if len(self.wordCasingLookup.get(bigram[0].lower())) >= 2:
+                self.forwardBiDist[bigram] += count
 
         # tigrams
         for trigram, count in map(parse_line, open(trigram_file)):
-            self.trigramDist[trigram] += count
+            if len(self.wordCasingLookup.get(trigram[1].lower())) >= 2:
+                self.trigramDist[trigram] += count
 
     def truecase(self, sentence, input_tokenized=False, output_tokenized=False, title_case_start_sentence=True):
         """
@@ -80,41 +83,40 @@ class StatisticalTruecaser(AbstractTruecaser):
         if not input_tokenized:
             sentence = self.tokenize(sentence)
 
-        tokensTrueCase = []
+        truecased_token = []
         for i, token in enumerate(sentence):
             # if toke is punctuation or digits
             if token in string.punctuation or token.isdigit():
-                tokensTrueCase.append(token)
+                truecased_token.append(token)
                 continue
 
-            candidates = self.wordCasingLookup.get(token)
+            candidates = self.wordCasingLookup.get(token.lower())
             if candidates:
                 if len(candidates) == 1:
-                    tokensTrueCase.append(iter(candidates).next())
+                    truecased_token.append(iter(candidates).next())
                 else:
-                    prevToken = tokensTrueCase[i-1] if i > 0 else None
+                    prevToken = truecased_token[i-1] if i > 0 else None
                     nextToken = sentence[i+1] if i < len(sentence)-1 else None
-
                     bestToken = max(candidates, key=lambda x: self._score(prevToken, x, nextToken))
-                    tokensTrueCase.append(bestToken)
-
+                    truecased_token.append(bestToken)
             else:  # Token out of vocabulary
-                if self.title_case_unknown_tokens:
-                    tokensTrueCase.append(token.title())
-                else:
-                    tokensTrueCase.append(token.lower())
+                truecased_token.append(token)
+                # if self.title_case_unknown_tokens:
+                #     truecased_token.append(token.title())
+                # else:
+                #     truecased_token.append(token.lower())
 
         if title_case_start_sentence:
             # Title case the first token in a sentence
-            if tokensTrueCase[0].islower():
-                tokensTrueCase[0] = tokensTrueCase[0].title()
-            elif tokensTrueCase[0] == '"':
-                tokensTrueCase[1] = tokensTrueCase[1].title()
+            if truecased_token[0].islower():
+                truecased_token[0] = truecased_token[0].title()
+            elif truecased_token[0] == '"':
+                truecased_token[1] = truecased_token[1].title()
 
         if not output_tokenized:
-            return self.untokenize(tokensTrueCase)
+            return self.untokenize(truecased_token)
 
-        return tokensTrueCase
+        return truecased_token
 
     def _check_sentence_sanity(self, sentence):
         """ Checks the sanity of the sentence. Reject too short sentences"""
