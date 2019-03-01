@@ -35,7 +35,7 @@ class AbstractTruecaser:
                     yield ' '
                     yield token
 
-        return ''.join(gen_token(tokens))
+        return ''.join(gen_token(tokens)).strip()
 
     @staticmethod
     def load(modelpath):
